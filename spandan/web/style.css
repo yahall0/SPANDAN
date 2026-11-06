@@ -103,9 +103,50 @@ pre { margin: 9px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: va
 .form-error { color: #a42d29; font-size: .82rem; margin: 0; }
 .toast { position: fixed; right: 20px; bottom: 20px; background: #193d33; color: #fff; border-radius: 8px; padding: 11px 15px; font-size: .86rem; max-width: calc(100vw - 40px); z-index: 3; }
 .loading { color: var(--muted); }
+.graph-layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(295px, 1fr); align-items: start; gap: 18px; }
+.graph-stack { display: grid; gap: 17px; min-width: 0; }
+.graph-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.graph-legend { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 11px 16px; font-size: .74rem; color: var(--muted); }
+.graph-legend span { display: inline-flex; gap: 6px; align-items: center; }
+.graph-legend i { border-top: 2px solid #397a5e; width: 15px; }
+.graph-legend .hyp i { border-top: 2px dashed #83602d; }
+.graph-legend .hearsay i { border-top: 2px dotted #5e6689; }
+.graph-legend .conflict i { border-color: #b34444; }
+.timeline-scroll { overflow: auto; border-top: 1px solid var(--line); max-height: 570px; background: #fafcf9; }
+.timeline { display: block; overflow: visible; }
+.timeline .lane { fill: #f6f9f5; stroke: #dce5dd; stroke-width: .6px; }
+.timeline .lane-name, .timeline .axis { fill: #53645d; font-size: 11px; font-weight: 650; }
+.timeline .axis { fill: #30644e; letter-spacing: .05em; }
+.timeline-node { cursor: pointer; }
+.timeline-node rect { fill: #fff; stroke: #8fb19c; stroke-width: 1.2; }
+.timeline-node.unordered rect, .timeline-node.untimed rect { stroke-dasharray: 4 3; }
+.timeline-node.reported rect { stroke: #5e6689; stroke-dasharray: 1.2 2.2; }
+.timeline-node:hover rect, .timeline-node:focus rect, .timeline-node.selected rect { fill: #e4f4e8; stroke: #1c5a46; stroke-width: 2; }
+.timeline-node text { font-size: 11px; fill: #182b27; font-weight: 650; }
+.timeline-node .event-time { fill: #53645d; font-size: 9px; font-weight: 400; }
+.timeline marker path { fill: #397a5e; }
+.timeline-edge { cursor: pointer; }
+.timeline-edge path { fill: none; }
+.timeline-edge .hit { stroke: transparent; stroke-width: 14; }
+.timeline-edge .stroke { stroke: #397a5e; stroke-width: 1.5; }
+.timeline-edge.inferred .stroke { stroke: #83602d; stroke-dasharray: 4 4; }
+.timeline-edge.conflict .stroke { stroke: #b34444; stroke-width: 2; }
+.timeline-edge:hover .stroke, .timeline-edge:focus .stroke { stroke-width: 3; }
+.graph-entities { display: flex; flex-wrap: wrap; gap: 7px; }
+.entity-chip { padding: 5px 10px; background: #eef6ef; border: 1px solid #c9ddcf; border-radius: 16px; color: #234d3d; font-size: .78rem; }
+.entity-chip:hover { background: #dceee1; }
+.graph-row { width: 100%; text-align: left; padding: 11px 15px; display: grid; gap: 4px; border: 0;
+  border-bottom: 1px solid var(--line); background: white; color: inherit; overflow-wrap: anywhere; }
+.graph-row:hover { background: #f0f7f1; }
+.graph-row small { color: var(--muted); }
+.graph-description { margin: 10px 0; font-size: .84rem; }
+.evidence-stack { display: grid; gap: 8px; margin: 10px 0; }
+.inspector-title { margin: 0 0 10px; font-size: 1.08rem; line-height: 1.4; overflow-wrap: anywhere; }
+.graph-linked { margin-top: 9px; }
 @media (max-width: 1050px) {
   body { grid-template-columns: 190px minmax(0, 1fr); }
   .layout { grid-template-columns: 1fr; }
+  .graph-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
   body { display: block; }

@@ -68,6 +68,27 @@ class Store:
                     kind TEXT NOT NULL, detail TEXT NOT NULL,
                     FOREIGN KEY(document_id, passage_id) REFERENCES passages(document_id, id)
                 );
+                CREATE TABLE IF NOT EXISTS witness_statements (
+                    document_id TEXT PRIMARY KEY REFERENCES documents(id),
+                    case_id TEXT NOT NULL REFERENCES documents(id), reporter TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS witness_case ON witness_statements(case_id);
+                CREATE TABLE IF NOT EXISTS claim_runs (
+                    document_id TEXT NOT NULL, passage_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL, result TEXT NOT NULL,
+                    PRIMARY KEY(document_id, passage_id, revision),
+                    FOREIGN KEY(document_id, passage_id) REFERENCES passages(document_id, id)
+                );
+                CREATE TABLE IF NOT EXISTS claim_run_archive (
+                    document_id TEXT NOT NULL, passage_id TEXT NOT NULL, revision INTEGER NOT NULL,
+                    created_at TEXT NOT NULL, result TEXT NOT NULL, decision_id TEXT NOT NULL,
+                    FOREIGN KEY(document_id, passage_id) REFERENCES passages(document_id, id)
+                );
+                CREATE TABLE IF NOT EXISTS claim_decisions (
+                    id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES documents(id),
+                    target TEXT NOT NULL, created_at TEXT NOT NULL, detail TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS claim_decision_case ON claim_decisions(case_id);
             ''')
 
     @contextmanager
@@ -85,12 +106,14 @@ class Store:
         with self.connection() as conn:
             conn.execute("UPDATE passages SET status = 'queued' WHERE status = 'running'")
 
-    def create(self, filename, data, case_ref, mode, officer_language, blocks, passages):
+    def create(self, filename, data, case_ref, mode, officer_language, blocks, passages, parent=None, reporter=None):
         doc_id = uuid4().hex
         with self.connection() as conn:
             conn.execute('INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                          (doc_id, case_ref, filename, Path(filename).suffix.lstrip('.').lower(), data,
                           digest(data), now(), '\n\n'.join(block for _, block in blocks), mode, officer_language))
+            if parent:
+                conn.execute('INSERT INTO witness_statements VALUES (?, ?, ?)', (doc_id, parent, reporter))
             conn.executemany('''
                 INSERT INTO passages
                 (document_id, id, ordinal, page, start, end, source, effective_source)
@@ -134,7 +157,12 @@ class Store:
                     COUNT(*) AS total, SUM(p.status='pass') AS passed,
                     SUM(p.status IN ('queued','running')) AS pending,
                     SUM(p.status IN ('clarify','unresolved')) AS review
-                FROM documents d JOIN passages p ON p.document_id=d.id
+                FROM documents d
+                LEFT JOIN witness_statements own ON own.document_id=d.id
+                JOIN passages p ON p.document_id=d.id OR p.document_id IN (
+                    SELECT document_id FROM witness_statements WHERE case_id=d.id
+                )
+                WHERE own.document_id IS NULL
                 GROUP BY d.id ORDER BY d.rowid DESC
             ''').fetchall()
             return [dict(row) for row in rows]
@@ -143,8 +171,9 @@ class Store:
         with self.connection() as conn:
             conn.execute('BEGIN')
             document = conn.execute('''
-                SELECT id, case_ref, filename, format, sha256, received_at, mode, officer_language
-                FROM documents WHERE id=?
+                SELECT d.id, d.case_ref, d.filename, d.format, d.sha256, d.received_at, d.mode,
+                    d.officer_language, w.case_id AS parent_case
+                FROM documents d LEFT JOIN witness_statements w ON w.document_id=d.id WHERE d.id=?
             ''', (doc_id,)).fetchone()
             if document is None:
                 return None

@@ -13,7 +13,7 @@ from tokenizers import Tokenizer
 
 from .rules import digest
 
-PROMPT_VERSION = 'typed-prompts-v1'
+PROMPT_VERSION = 'typed-prompts-v2'
 NLI_REPO = 'cross-encoder/nli-MiniLM2-L6-H768'
 NLI_REVISION = 'b95119ce93d3e065de6214e38cd4a97b0f2f2c6d'
 NLI_FILES = {'tokenizer.json': 'tokenizer.json', 'model.onnx': 'onnx/model_quint8_avx2.onnx'}

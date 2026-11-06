@@ -98,6 +98,7 @@ TRANSLATION_PROMPT = (
 FRAME_PROMPT = (
     'Extract every atomic material statement from this one passage. Evidence must be an exact continuous '
     'quote from the input passage for each statement. Preserve all clauses, including who said or heard what. '
+    'Include any leading ordering words in the quote, such as "Then", "After that" or "Before that". '
     'Keep only the evidence quote in the original language. ALL other text fields must be in English, '
     'even for Hindi or Gujarati evidence. Do not include original-script words or parenthetical glosses in slots. '
     'Use short plain English, without extra articles. Never guess a value. '

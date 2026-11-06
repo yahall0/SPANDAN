@@ -36,26 +36,27 @@ function notify(message) {
 
 function route() {
   const hash = location.hash;
-  const match = /^#case\/([a-f0-9]{32})$/.exec(hash);
-  return {key: match ? match[1] : hash === '#new' ? 'new' : 'home'};
+  const match = /^#(case|graph)\/([a-f0-9]{32})$/.exec(hash);
+  return {key: match ? match[2] : hash === '#new' ? 'new' : 'home', view: match?.[1] || 'home'};
 }
 
 async function refresh(force = false) {
-  const {key} = route();
-  if (key !== current.key) current = {key, signature: '', passage: '', draft: false};
+  const {key, view} = route();
+  if (key !== current.key || view !== current.view) current = {key, view, signature: '', passage: '', draft: false};
   const state = current;
   if (!force && state.draft) return;
   try {
-    const data = await request(key === 'home' || key === 'new' ? '/api/cases' : '/api/cases/' + key);
-    if (state !== current || key !== route().key || (!force && state.draft)) return;
+    const data = await request(key === 'home' || key === 'new' ? '/api/cases' : '/api/cases/' + key + (view === 'graph' ? '/graph' : ''));
+    if (state !== current || key !== route().key || view !== route().view || (!force && state.draft)) return;
     const signature = JSON.stringify(data);
     if (!force && signature === state.signature) return;
     // Preserve the officer's focus and expanded evidence while other passages finish.
     if (!force && (content.contains(document.activeElement) || content.querySelector('details[open]'))) return;
     state.signature = signature;
-    content.innerHTML = Array.isArray(data) ? dashboard(data, key === 'new') : caseView(data);
+    state.data = data;
+    content.innerHTML = Array.isArray(data) ? dashboard(data, key === 'new') : view === 'graph' ? graphView(data) : caseView(data);
     content.setAttribute('aria-busy', 'false');
-    document.querySelector('#breadcrumb').textContent = key === 'new' ? 'New complaint' : key === 'home' ? 'Case intake' : 'Passage review';
+    document.querySelector('#breadcrumb').textContent = view === 'graph' ? 'Claims and timeline' : key === 'new' ? 'New complaint' : key === 'home' ? 'Case intake' : 'Passage review';
     document.querySelector('#nav-cases').classList.toggle('active', key !== 'new');
     document.querySelector('#nav-new').classList.toggle('active', key === 'new');
   } catch (error) {
@@ -107,6 +108,7 @@ function caseView(doc) {
   return '<a class="back" href="#">← Case intake</a><div class="heading"><div><span class="eyebrow">Passage verification</span><h1>' +
     safe(doc.case_ref || doc.filename) + '</h1><p>' + safe(doc.case_ref ? doc.filename + ' · ' : '') +
     safe(doc.mode === 'live' ? 'Complainant at the desk' : 'Deferred call-back') + '</p></div><div class="actions">' +
+    '<a class="button secondary" href="#graph/' + safe(doc.parent_case || doc.id) + '">Claims and timeline</a>' +
     '<a class="button secondary" href="' + base + '/original">Original file</a>' +
     (passed ? '<a class="button" download="spandan-checked.json" href="' + base + '/handoff' +
       (passed === passages.length ? '?finalize=true">Download checked English' : '">Download verified passages') + '</a>' : '') +
@@ -224,21 +226,32 @@ content.addEventListener('submit', async event => {
   submit.disabled = true;
   current.draft = true;
   try {
-    if (type === 'upload') {
+    if (type === 'upload' || type === 'witness') {
       const created = await request('/api/cases', {method: 'POST', body: data});
       current.draft = false;
-      location.hash = 'case/' + created.id;
-      notify('Complaint queued for verification.');
+      if (type === 'witness') {
+        await refresh(true);
+        notify('Witness statement queued for verification.');
+      } else {
+        location.hash = 'case/' + created.id;
+        notify('Complaint queued for verification.');
+      }
     } else {
       const body = {...Object.fromEntries(data), revision: Number(form.dataset.revision)};
       if (type === 'review' && body.action !== 'clarify') {
         body.corrected_source = '';
         body.language = '';
       }
+      if (type === 'decision') {
+        delete body.revision;
+        body.version = form.dataset.version;
+        body.target = form.dataset.target;
+        for (const field of ['field', 'value', 'other']) body[field] = body[field] || null;
+      }
       await request(form.dataset.url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
       current.draft = false;
       await refresh(true);
-      notify(type === 'review' ? 'Officer review saved.' : 'Feedback saved.');
+      notify(type === 'review' ? 'Officer review saved.' : type === 'decision' ? 'Graph decision recorded.' : 'Feedback saved.');
     }
   } catch (error) {
     errorOutput.textContent = error.message;
