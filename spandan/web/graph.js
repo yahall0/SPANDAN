@@ -4,27 +4,54 @@ const relationLabels = {before: 'Before', triggered: 'Triggered', possible_same_
   possible_actor: 'Possible actor connection', from_times: 'From times', stated: 'Stated', inferred: 'Inferred'};
 const graphLabel = value => relationLabels[value] || String(value || '').replaceAll('_', ' ');
 const graphShort = (text, limit) => text.length <= limit ? text : text.slice(0, limit - 1) + '…';
+const issueTitle = issue => ({
+  'Batch shape': 'Extraction returned no usable result',
+  'Frame coverage': 'A checked statement has no cleared claim',
+  'Local model': 'Local model could not finish',
+  'Internal error': 'Claim checks could not finish'
+}[issue.name] || issue.name);
+const claimState = claim => claim.handoff ?
+  (claim.status === 'officer_confirmed' ? 'Officer cleared' : 'Model verified') :
+  claim.disposition === 'other_account_preserved' ? 'Other account preserved' : 'Held from export';
 
 function graphView(graph) {
   const base = '/api/cases/' + safe(graph.case.id) + '/graph';
-  const selected = current.graphSelection;
-  const claims = graph.claims.filter(c => c.status === 'escalated');
-  const activeIssues = graph.issues.filter(issue => issue.decision?.action !== 'prefer');
-  const checked = graph.claims.filter(c => c.handoff).length;
+  const cleared = graph.claims.filter(c => c.handoff);
+  const selected = current.graphSelection || (cleared[0] ? {type: 'claim', id: cleared[0].id} : null);
+  const checked = cleared.length;
+  const blocked = graph.pending.filter(needsIntake);
+  const processing = graph.pending.length - blocked.length;
+  const queue = reviewGroups(graph);
   const focus = selected && graph.events.find(e => e.id === selected.id && selected.type === 'event');
   const visible = graph.events.length > 18 && !current.fullGraph
     ? neighborhood(graph, focus || graph.events[0]) : graph.events;
-  const unresolved = claims.length + activeIssues.length;
   return '<a class="back" href="#case/' + safe(graph.case.id) + '">← Passage intake</a>' +
     '<div class="heading"><div><span class="eyebrow">Component 02 · Claims and timeline</span><h1>' +
     safe(graph.case.case_ref || graph.case.filename) + '</h1>' +
-    '<p>Trace each account to the checked passage and original evidence.</p></div><div class="actions">' +
+    '<p>Read the cleared claims and resolve the items holding up the case.</p></div><div class="actions">' +
     (checked ? '<a class="button secondary" download="spandan-claims.json" href="' + base + '/handoff">Export cleared claims</a>' : '') +
+    '<button type="button" class="button secondary" data-case-refresh>Refresh</button>' +
     '<a class="button secondary" download="spandan-claim-audit.json" href="' + base + '/audit">Export audit</a></div></div>' +
-    '<div class="metric-grid">' + metric('Source statements', graph.statements.length) + metric('Cleared claims', checked) +
-    metric('Review items', unresolved) + metric('Pending passages', graph.pending.length) + '</div>' +
-    '<div class="graph-layout"><div class="graph-stack"><section class="card"><div class="card-title graph-header">' +
-    '<div><h2>Event timeline</h2><p>Source lanes · Order, without time scale</p></div>' +
+    '<div class="metric-grid">' + metric('Cleared claims', checked) + metric('Claim review groups', queue.length) +
+    metric('Blocked at intake', blocked.length) + metric('Processing', processing) + '</div>' +
+    '<section class="case-next notice info" aria-label="What to do next"><strong>' +
+    (blocked.length || queue.length || processing ? 'Partial case results' : 'Case review complete') + '</strong><p>' +
+    (blocked.length ? 'Start with the intake holds, which have no claim results yet. ' : '') +
+    (queue.length ? 'Open a claim review group to see the evidence and the failed check. ' : '') +
+    (processing ? 'The app is still checking ' + processing + (processing === 1 ? ' passage.' : ' passages.') : '') +
+    (!blocked.length && !queue.length && !processing ? 'Review cleared claims below or export the case.' : '') + '</p>' +
+    (blocked.length ? '<div class="actions">' + blocked.map(p => {
+      const source = graph.statements.find(doc => doc.id === p.document_id);
+      return '<a class="button secondary" href="' + passageUrl(p.document_id, p.passage_id) + '">' +
+        safe((source?.reporter || 'Source') + ' · ' + p.passage_id) + '</a>';
+    }).join('') + '</div>' : '') + '</section>' +
+    '<div class="graph-layout"><div class="graph-stack"><section class="card"><div class="card-title"><h2>Cleared claims</h2>' +
+    '<p>Read each account and open its supporting quote.</p></div>' +
+    (cleared.length ? cleared.map(c => graphRow('claim', c.id, c.text, c.reporter + ' · ' + c.passage_id + ' · ' + claimState(c))).join('') :
+      '<p class="card-body subtle">Claims appear here once cleared by the checks or an officer.</p>') +
+    '</section><section class="card"><div class="card-title graph-header">' +
+    '<div><h2>Event timeline</h2><p>' + (graph.events.length === 1 ? 'One event is available to order.' :
+      'Source lanes · Events without an ordering link stay under Unordered.') + '</p></div>' +
     (graph.events.length > 18 ? '<button type="button" class="button secondary" data-graph-toggle="true">' +
       (current.fullGraph ? 'Focus view' : 'Full graph') + '</button>' : '') + '</div>' +
     '<div class="graph-legend"><span><i></i> Stated or timed</span><span class="hyp"><i></i> Inferred connection</span>' +
@@ -35,12 +62,47 @@ function graphView(graph) {
     (graph.entities.map(e => graphButton('entity', e.id, e.label + (e.identity === 'unidentified' ? ' · unidentified' : ''), 'entity-chip')).join('') ||
       '<p class="subtle">People, objects, places and times will appear here.</p>') +
     '</div></section>' + sources(graph) + '</div><div class="graph-stack">' +
-    '<section class="card"><div class="card-title"><h2>Review queue</h2><p>Open an item to record an officer decision.</p></div>' +
-    ((claims.length || graph.issues.length) ? claims.map(c => graphRow('claim', c.id, c.text, c.decision ? 'Unresolved claim' : 'Claim escalation')).join('') +
-      graph.issues.map(i => graphRow('issue', i.id, i.name, i.decision ? 'Decision recorded' : i.detail)).join('') :
-      '<p class="card-body subtle">No escalations or conflicts.</p>') +
-    '</section><section class="card"><div class="card-title"><h2>Evidence inspector</h2></div>' +
-    '<div class="card-body">' + inspector(graph, selected, base) + '</div></section></div></div>';
+    '<section class="card" id="case-evidence"><div class="card-title"><h2>Evidence inspector</h2></div>' +
+    '<div class="card-body">' + inspector(graph, selected, base) + '</div></section>' +
+    '<section class="card"><div class="card-title"><h2>Claim review queue</h2><p>Grouped by source passage so each issue stays with its evidence.</p></div>' +
+    (queue.length ? queue.map(group => '<details class="review-group"' +
+      (group.rows.some(row => row.id === selected?.id) ? ' open' : '') + '><summary><strong>' + safe(group.title) + '</strong>' +
+      '<span class="status clarify">' + safe(group.rows.length + (group.rows.length === 1 ? ' item' : ' items')) + '</span>' +
+      '<small>' + safe(excerpt(group.source)) + '</small></summary>' +
+      group.rows.map(row => graphRow(row.type, row.id, row.title, row.detail)).join('') + '</details>').join('') :
+      '<p class="card-body subtle">No open claim escalations or conflicts.</p>') +
+    '</section></div></div>';
+}
+
+function reviewGroups(graph) {
+  const groups = new Map();
+  const groupKey = (evidence, passageId) => evidence ? evidence.document_id + '/' + passageId : 'case';
+  const batchHolds = new Set(graph.issues.filter(i => i.name === 'Batch shape' && i.evidence)
+    .map(i => groupKey(i.evidence, i.passage_id)));
+  function add(row, evidence, passageId) {
+    const id = groupKey(evidence, passageId);
+    if (!groups.has(id)) groups.set(id, {
+      title: evidence ? evidence.reporter + ' · ' + passageId : 'Case-wide issues',
+      source: evidence?.source || 'Compare the affected claims.',
+      rows: []
+    });
+    groups.get(id).rows.push(row);
+  }
+  for (const claim of graph.claims.filter(c => c.status === 'escalated')) {
+    const reason = claim.checks.find(c => !c.ok)?.reason;
+    add({type: 'claim', id: claim.id, title: excerpt(claim.text, 130),
+      detail: claim.decision ? 'Officer left this unresolved' : reason || 'Officer decision needed'},
+    claim.evidence, claim.passage_id);
+  }
+  for (const issue of graph.issues) {
+    if (issue.decision?.action === 'prefer' || (issue.name === 'Frame coverage' &&
+      batchHolds.has(groupKey(issue.evidence, issue.passage_id)))) continue;
+    add({type: 'issue', id: issue.id, title: issueTitle(issue),
+      detail: issue.decision ? 'Officer left this unresolved' : issue.frame_evidence ?
+        excerpt(issue.frame_evidence, 130) : issue.name === 'Batch shape' ? 'Rerun claim extraction for this passage.' : issue.detail},
+    issue.evidence, issue.passage_id);
+  }
+  return [...groups.values()];
 }
 
 function graphButton(type, id, label, style = 'button secondary') {
@@ -155,6 +217,7 @@ function sources(graph) {
     '<form data-form="witness"><input type="hidden" name="parent_case" value="' + safe(graph.case.id) + '">' +
     '<label class="field">Witness name or reference<input name="reporter" maxlength="100" required></label>' +
     '<label class="field">Typed statement<input name="file" type="file" accept=".pdf,.docx,.doc,.txt" required></label>' +
+    sourceLanguageControl() +
     '<div class="field-grid"><label class="field">Witness<select name="mode"><option value="live">At the desk</option>' +
     '<option value="deferred">Call back later</option></select></label><label class="field">Officer language' +
     '<select name="officer_language"><option value="en">English</option><option value="hi">हिन्दी</option>' +
@@ -170,20 +233,32 @@ function inspector(graph, selected, base) {
     const claim = claimById(event?.claim_id || selected.id);
     if (!claim) return '<p class="subtle">This item is no longer in the current graph.</p>';
     const related = graph.entity_links.filter(l => l.from === claim.id);
-    const badges = '<span class="status ' + (claim.handoff ? 'pass' : 'clarify') + '">' + safe(graphLabel(claim.status)) + '</span>';
+    const badges = '<span class="status ' + (claim.handoff ? 'pass' : 'clarify') + '">' + safe(claimState(claim)) + '</span>';
     const controls = claim.status === 'escalated' ? ['confirm', 'correct', 'unresolved'] : ['correct', 'unresolved'];
     if (claim.status === 'escalated' && claim.checks.some(c => c.name === 'Local verification')) controls.unshift('retry');
+    const failed = claim.checks.filter(check => !check.ok);
+    const badQuote = failed.some(check => check.name === 'Exact quote');
+    const fields = [['Actor', claim.actor], ['Action', claim.act], ['Object', claim.object], ['Place', claim.place],
+      ['Time', claim.time], ['Source of knowledge', claim.knowledge], ['Quantity', claim.quantity]].filter(([, value]) => value);
     return '<h3 class="inspector-title">' + safe(claim.text) + '</h3><div class="actions">' + badges + '<span class="status">' +
       safe(graphLabel(claim.kind)) + '</span><span class="status">' + safe(graphLabel(claim.evidentiality)) + '</span></div>' +
       '<p class="subtle graph-description">' + safe(claim.reporter + ' · ' + claim.passage_id + ' · ' + graphLabel(claim.polarity)) + '</p>' +
-      '<div class="evidence-stack">' + panel('Exact checked English quote', claim.quote) + panel('Original passage', claim.evidence.source) +
+      (failed.length && !claim.handoff ? '<div class="notice"><strong>Why this claim is held</strong><ul>' +
+        failed.map(check => '<li>' + safe(check.reason) +
+          (check.differences ? '<ul>' + check.differences.map(d => '<li>' + safe(d.field + ' · Intake read “' +
+            (d.intake || 'blank') + '” · Claim read “' + (d.claim || 'blank') + '”') + '</li>').join('') + '</ul>' : '') +
+          '</li>').join('') + '</ul></div>' : '') +
+      '<div class="evidence-stack">' + panel(badQuote ? 'Proposed quote · exact match failed' : 'Quote from checked passage', claim.quote) +
+      (badQuote ? panel('Checked English passage', claim.evidence.english) : '') + panel('Original passage', claim.evidence.source) +
       (claim.evidence.effective_source !== claim.evidence.source ? panel('Officer-corrected source', claim.evidence.effective_source) : '') +
-      '</div><a class="back" href="#case/' + safe(claim.document_id) + '">Open source statement →</a>' +
+      '</div><a class="back" href="' + passageUrl(claim.document_id, claim.passage_id) + '">Open passage ' + safe(claim.passage_id) + ' →</a>' +
       (related.length ? '<div class="actions graph-entities">' + related.map(link => {
         const entity = graph.entities.find(e => e.id === link.to);
         return entity ? graphButton('entity', entity.id, link.relation + ' · ' + entity.label, 'entity-chip') : '';
       }).join('') + '</div>' : '') +
       (event?.time ? '<p class="subtle graph-description">' + safe(event.time.precision + ' time · ' + event.time.text) + '</p>' : '') +
+      (fields.length ? '<details class="fold"><summary>How the claim was read</summary><dl class="claim-fields">' +
+        fields.map(([field, value]) => '<dt>' + safe(field) + '</dt><dd>' + safe(value) + '</dd>').join('') + '</dl></details>' : '') +
       (claim.decision ? '<p class="notice info">' + safe(claim.decision.officer + ' · ' + claim.decision.reason) + '</p>' : '') +
       '<details class="fold"><summary>Verification checks</summary>' +
       [...claim.checks, ...(claim.officer_checks || [])].map(c => '<p><strong>' + safe(c.name) + ' · ' +
@@ -202,17 +277,22 @@ function inspector(graph, selected, base) {
   const issue = graph.issues.find(i => i.id === selected.id);
   const link = [...graph.order_links, ...graph.inferred_connections].find(e => e.id === selected.id);
   if (issue || link) {
-    const heading = issue?.name || graphLabel(link.relation);
+    const heading = issue ? issueTitle(issue) : graphLabel(link.relation);
+    const retryable = issue && ['Local model', 'Internal error', 'Batch shape'].includes(issue.name);
     return '<h3 class="inspector-title">' + safe(heading) + '</h3><p class="subtle graph-description">' +
-      safe(issue?.detail || (graphLabel(link.basis) + (link.cue ? ' · “' + link.cue + '”' : '') +
+      safe((issue?.name === 'Batch shape' ? 'The model missed this passage when returning its results. Rerun extraction to try it again.' :
+        issue?.detail) || (graphLabel(link.basis) + (link.cue ? ' · “' + link.cue + '”' : '') +
         (link.reason ? ' · ' + link.reason : ''))) + '</p>' +
       ((issue || link).claim_ids.map(id => {
         const c = claimById(id);
         return c ? graphRow('claim', id, c.text, c.reporter + ' · ' + c.passage_id) : '';
-      }).join('')) + (issue?.evidence ? panel('Original passage', issue.evidence.source) : '') +
+      }).join('')) + (issue?.frame_evidence ? panel('Intake statement missing a claim', issue.frame_evidence) : '') +
+      (issue?.evidence ? panel('Original passage', issue.evidence.source) +
+        '<a class="back" href="' + passageUrl(issue.evidence.document_id, issue.passage_id) + '">Open passage ' +
+        safe(issue.passage_id) + ' →</a>' : '') +
       (issue?.decision ? '<p class="notice info">' + safe(issue.decision.officer + ' · ' + issue.decision.reason) + '</p>' : '') +
       (issue ? decisionForm(graph, base, issue.id, issue.claim_ids.length > 1 ? ['prefer', 'unresolved'] :
-        ['Local model', 'Internal error'].includes(issue.name) ? ['retry', 'unresolved'] : ['unresolved'],
+        retryable ? ['retry', 'unresolved'] : ['unresolved'],
         issue.claim_ids.map(id => ({id, label: claimById(id)?.text || id}))) : '');
   }
   return '<p class="subtle">This item is no longer in the current graph.</p>';
@@ -223,7 +303,8 @@ function decisionForm(graph, base, id, actions, others) {
     prefer: 'Choose an account', merge: 'Merge into another entity', retry: 'Rerun local claim checks'};
   const fields = ['text', 'kind', 'actor', 'act', 'object', 'place', 'time', 'quantity', 'knowledge',
     'evidentiality', 'polarity', 'certainty'];
-  return '<details class="fold"><summary>Record officer decision</summary><form data-form="decision" data-url="' + base +
+  return '<details class="fold"><summary>' + (actions[0] === 'retry' ? 'Rerun or leave unresolved' : 'Record officer decision') +
+    '</summary><form data-form="decision" data-url="' + base +
     '/decisions" data-version="' + safe(graph.version) + '" data-target="' + safe(id) + '">' +
     '<label class="field">Officer name or ID<input name="officer" maxlength="100" required></label>' +
     '<label class="field">Decision<select name="action">' +
@@ -253,6 +334,7 @@ document.addEventListener('click', event => {
     const inspectorHeading = content.querySelector('.inspector-title');
     if (inspectorHeading) {
       inspectorHeading.tabIndex = -1;
+      inspectorHeading.scrollIntoView({block: 'nearest'});
       inspectorHeading.focus({preventScroll: true});
     }
   }

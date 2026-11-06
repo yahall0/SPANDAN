@@ -24,6 +24,40 @@ def make_gold_runs(case, documents):
 
 
 class ClaimsTests(unittest.TestCase):
+    def test_pdf_line_wrap_recovers_exact_evidence_without_changing_words(self):
+        case = next(c for c in load_corpus(DEFAULT_CORPUS) if c['family'] == 'negation')
+        item = fixture_inputs(case)[0][0]
+        candidate = Candidate.model_validate(case['statements'][0]['passages'][0]['gold_claim'])
+        item['english'] = item['english'].replace('see ', 'see\n')
+        item['frames'][0]['act'] = 'not see'
+        claim = _claim(item, candidate)
+        self.assertEqual(claim['quote'], item['english'])
+        self.assertEqual(item['english'][claim['quote_start']:claim['quote_end']], claim['quote'])
+        self.assertTrue(next(c['ok'] for c in claim['checks'] if c['name'] == 'Intake agreement'))
+        changed = _claim(item, candidate.model_copy(update={'quote': candidate.quote.replace('not ', '')}))
+        self.assertFalse(next(c['ok'] for c in changed['checks'] if c['name'] == 'Exact quote'))
+
+    def test_missing_batch_results_are_retried_in_isolation(self):
+        class OmittedBatchModel(FixedModels):
+            def __init__(self):
+                super().__init__()
+                self.requests = []
+
+            def chat(self, model, role, instruction, data, schema, trace, inventory, budget):
+                if role == 'Claim extraction':
+                    ids = [item['id'] for item in data['passages']]
+                    self.requests.append(ids)
+                    return schema.model_validate({'passages': [
+                        {'id': identifier, 'claims': []} for identifier in ids[:1]
+                    ]})
+                return super().chat(model, role, instruction, data, schema, trace, inventory, budget)
+
+        case = next(c for c in load_corpus(DEFAULT_CORPUS) if c['family'] == 'stated_order')
+        models = OmittedBatchModel()
+        runs = ClaimExtractor(models).process(fixture_inputs(case)[0])
+        self.assertEqual(models.requests[:3], [['H01', 'H02'], ['H01'], ['H02']])
+        self.assertEqual([i['name'] for i in runs['H02']['attempts'][0]['issues']], ['Batch shape'])
+
     def test_fictional_corpus_graph_expectations(self):
         cases = load_corpus(DEFAULT_CORPUS)
         self.assertEqual(len({case['id'] for case in cases}), 50)

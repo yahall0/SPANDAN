@@ -143,6 +143,23 @@ pre { margin: 9px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: va
 .evidence-stack { display: grid; gap: 8px; margin: 10px 0; }
 .inspector-title { margin: 0 0 10px; font-size: 1.08rem; line-height: 1.4; overflow-wrap: anywhere; }
 .graph-linked { margin-top: 9px; }
+.case-next .actions { margin-top: 9px; }
+.case-next a, .notice a { text-decoration: underline; text-underline-offset: 2px; }
+.case-next a.button { text-decoration: none; }
+.review-filters { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.review-filters .button { min-height: 31px; padding: 4px 8px; font-size: .75rem; }
+.review-filters [aria-pressed="true"] { background: #e4f4e8; border-color: #8fb19c; }
+.passage-excerpt { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.review-group { border-bottom: 1px solid var(--line); }
+.review-group > summary { cursor: pointer; padding: 10px 14px; color: var(--ink, #182b27); }
+.review-group > summary .status { float: right; }
+.review-group > summary small { display: block; color: var(--muted); margin-top: 3px; }
+.review-group .graph-row { padding-left: 23px; }
+.review-group .graph-row:last-child { border-bottom: 0; }
+#case-evidence { scroll-margin-block: 16px; }
+.claim-fields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 11px; margin-bottom: 4px; }
+.claim-fields dt { font-weight: 650; }
+.claim-fields dd { margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 1050px) {
   body { grid-template-columns: 190px minmax(0, 1fr); }
   .layout { grid-template-columns: 1fr; }

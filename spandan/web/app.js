@@ -5,6 +5,7 @@ const statusIndicator = document.querySelector('#system-status');
 const toast = document.querySelector('#toast');
 const labels = {pass: 'Verified', clarify: 'Review', unresolved: 'Unresolved', running: 'Checking', queued: 'Queued'};
 const layers = {L0: 'Structure', L1: 'Meaning anchors', L2: 'English agreement', L3: 'Source verification'};
+const languageNames = new Intl.DisplayNames(['en'], {type: 'language'});
 let current = {key: '', signature: '', passage: '', draft: false};
 let toastTimer;
 
@@ -14,6 +15,12 @@ const safe = value => String(value ?? '').replace(/[&<>"']/g, char => ({
 const timestamp = value => new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'}).format(new Date(value));
 const badge = status => '<span class="status ' + safe(status) + '">' + safe(labels[status] || status) + '</span>';
 const metric = (label, value) => '<div class="metric"><span>' + safe(label) + '</span><strong>' + safe(value) + '</strong></div>';
+const passageUrl = (documentId, passageId) => '#case/' + safe(documentId) + '/' + safe(passageId);
+const needsIntake = passage => ['clarify', 'unresolved'].includes(passage.status);
+const excerpt = (value, limit = 105) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > limit ? text.slice(0, limit - 1) + '…' : text;
+};
 const panel = (title, text, checked = false) => '<div class="text-panel ' + (checked ? 'checked' : '') +
   '"><h3>' + safe(title) + '</h3><p dir="auto">' + safe(text) + '</p></div>';
 
@@ -36,18 +43,23 @@ function notify(message) {
 
 function route() {
   const hash = location.hash;
-  const match = /^#(case|graph)\/([a-f0-9]{32})$/.exec(hash);
-  return {key: match ? match[2] : hash === '#new' ? 'new' : 'home', view: match?.[1] || 'home'};
+  const match = /^#(case|graph)\/([a-f0-9]{32})(?:\/(H\d+))?$/.exec(hash);
+  return {key: match ? match[2] : hash === '#new' ? 'new' : 'home', view: match?.[1] || 'home', passage: match?.[3] || ''};
 }
 
 async function refresh(force = false) {
-  const {key, view} = route();
-  if (key !== current.key || view !== current.view) current = {key, view, signature: '', passage: '', draft: false};
+  const {key, view, passage} = route();
+  if (key !== current.key || view !== current.view) current = {key, view, signature: '', passage, draft: false};
+  if (current.routePassage !== passage) {
+    current.routePassage = passage;
+    current.passage = passage;
+    current.passageFilter = 'all';
+  }
   const state = current;
   if (!force && state.draft) return;
   try {
     const data = await request(key === 'home' || key === 'new' ? '/api/cases' : '/api/cases/' + key + (view === 'graph' ? '/graph' : ''));
-    if (state !== current || key !== route().key || view !== route().view || (!force && state.draft)) return;
+    if (state !== current || key !== route().key || view !== route().view || passage !== route().passage || (!force && state.draft)) return;
     const signature = JSON.stringify(data);
     if (!force && signature === state.signature) return;
     // Preserve the officer's focus and expanded evidence while other passages finish.
@@ -72,12 +84,19 @@ function uploadCard() {
     '<form data-form="upload"><label class="field">Complaint document' +
     '<input name="file" type="file" accept=".pdf,.docx,.doc,.txt" required><small>PDF, DOCX, DOC or TXT · Up to 10 MB</small></label>' +
     '<label class="field">Case reference <input name="case_ref" maxlength="100" placeholder="Optional reference"></label>' +
+    sourceLanguageControl() +
     '<div class="field-grid"><label class="field">Complainant<select name="mode"><option value="live">At the desk</option>' +
     '<option value="deferred">Call back later</option></select></label>' +
     '<label class="field">Officer language<select name="officer_language"><option value="en">English</option>' +
     '<option value="hi">हिन्दी</option><option value="gu">ગુજરાતી</option></select></label></div>' +
     '<p class="form-error" role="alert" hidden></p><button class="button" type="submit">Start verification <span aria-hidden="true">→</span></button>' +
     '</form></div></section>';
+}
+
+function sourceLanguageControl() {
+  return '<label class="field">Document language<select name="source_language"><option value="">Detect automatically</option>' +
+    '<option value="en">English · I confirm this document is in English</option></select>' +
+    '<small>Applies to the uploaded text. Officer language controls review questions.</small></label>';
 }
 
 function dashboard(cases, isNew) {
@@ -100,27 +119,34 @@ function dashboard(cases, isNew) {
 
 function caseView(doc) {
   const passages = doc.passages;
-  const selected = passages.find(p => p.id === current.passage) ||
-    passages.find(p => p.status === 'clarify' || p.status === 'unresolved') || passages[0];
   const passed = passages.filter(p => p.status === 'pass').length;
-  const review = passages.filter(p => p.status === 'clarify' || p.status === 'unresolved').length;
+  const review = passages.filter(needsIntake).length;
+  const visible = current.passageFilter === 'review' ? passages.filter(needsIntake) : passages;
+  const selected = visible.find(p => p.id === current.passage) || visible.find(needsIntake) || visible[0];
   const base = '/api/cases/' + safe(doc.id);
   return '<a class="back" href="#">← Case intake</a><div class="heading"><div><span class="eyebrow">Passage verification</span><h1>' +
     safe(doc.case_ref || doc.filename) + '</h1><p>' + safe(doc.case_ref ? doc.filename + ' · ' : '') +
     safe(doc.mode === 'live' ? 'Complainant at the desk' : 'Deferred call-back') + '</p></div><div class="actions">' +
     '<a class="button secondary" href="#graph/' + safe(doc.parent_case || doc.id) + '">Claims and timeline</a>' +
+    '<button type="button" class="button secondary" data-case-refresh>Refresh</button>' +
     '<a class="button secondary" href="' + base + '/original">Original file</a>' +
     (passed ? '<a class="button" download="spandan-checked.json" href="' + base + '/handoff' +
       (passed === passages.length ? '?finalize=true">Download checked English' : '">Download verified passages') + '</a>' : '') +
     '</div></div><div class="case-meta"><span>Received ' + safe(timestamp(doc.received_at)) + '</span><span>English output</span>' +
     '<span title="' + safe(doc.sha256) + '">SHA-256 ' + safe(doc.sha256.slice(0, 12)) + '…</span></div>' +
     '<div class="metric-grid">' + metric('Total passages', passages.length) + metric('Verified', passed) +
-    metric('Needs review', review) + metric('In progress', passages.length - passed - review) + '</div>' +
-    '<div class="review-layout"><section class="card"><div class="card-title"><h2>Passages</h2></div><div class="passage-list">' +
-    passages.map(p => '<button type="button" class="passage-button ' + (p.id === selected.id ? 'selected' : '') +
+    metric('Needs intake review', review) + metric('In progress', passages.length - passed - review) + '</div>' +
+    '<p class="notice info">' + (review ? safe(review + ' passages need intake review before claim extraction can use them. ') : '') +
+    'Verified here means the passage cleared intake. Open <a href="#graph/' + safe(doc.parent_case || doc.id) +
+    '">Claims and timeline</a> to see which claims cleared the next stage.</p>' +
+    '<div class="review-layout"><section class="card"><div class="card-title"><h2>Passages</h2>' +
+    '<div class="review-filters">' + [['all', 'All passages'], ['review', 'Needs review']].map(([filter, label]) =>
+      '<button type="button" class="button secondary" data-passage-filter="' + filter + '" aria-pressed="' +
+      ((current.passageFilter || 'all') === filter) + '">' + label + '</button>').join('') + '</div></div><div class="passage-list">' +
+    visible.map(p => '<button type="button" class="passage-button ' + (p.id === selected?.id ? 'selected' : '') +
       '" data-passage="' + safe(p.id) + '" aria-pressed="' + (p.id === selected.id) + '"><span><strong>' + safe(p.id) +
-      '</strong><small>' + (p.page ? 'Page ' + safe(p.page) : 'Passage ' + safe(p.ordinal)) + '</small></span>' + badge(p.status) + '</button>').join('') +
-    '</div></section>' + passageView(doc, selected, base) + '</div>';
+      '</strong><small class="passage-excerpt">' + safe(excerpt(p.source, 85)) + '</small></span>' + badge(p.status) + '</button>').join('') +
+    '</div></section>' + (selected ? passageView(doc, selected, base) : '<p class="notice info">No passages need intake review.</p>') + '</div>';
 }
 
 function passageView(doc, p, base) {
@@ -128,7 +154,8 @@ function passageView(doc, p, base) {
   const attempt = result?.attempts?.at(-1);
   let section = '<section class="card"><div class="card-title"><h2>Passage ' + safe(p.id) + ' ' + badge(p.status) + '</h2>' +
     '<p>' + (p.page ? 'PDF page ' + safe(p.page) + ' · ' : '') + 'Source characters ' + safe(p.start) + '–' + safe(p.end) +
-    ' · Revision ' + safe(p.revision) + (result?.language ? ' · ' + safe(result.language.language.toUpperCase()) : '') + '</p></div><div class="card-body">' +
+    ' · Revision ' + safe(p.revision) + (result?.language ? (p.language_override ? ' · Confirmed ' : ' · Detected ') +
+      safe(languageNames.of(result.language.language)) : '') + '</p></div><div class="card-body">' +
     '<div class="comparison">' + panel('Original source', p.source) +
     panel(p.status === 'pass' ? 'Verified English' : 'English output',
       p.status === 'pass' ? result.checked_english : 'Available after verification passes.', p.status === 'pass') + '</div>';
@@ -137,8 +164,12 @@ function passageView(doc, p, base) {
     section += '<p class="notice info">The local worker will process this passage. Other verified passages are available as they finish.</p>';
   }
   if (p.status === 'clarify' || p.status === 'unresolved') {
+    const next = result.slot === 'language' ? 'Select the confirmed language and record a short review note.' :
+      result.slot === 'service' ? 'Retry after the local models are available.' :
+      'Compare the original with the reason below. Record a clarification if the source can be made clearer.';
     section += '<div class="notice"><strong>' + safe(p.status === 'unresolved' ? 'Held as unresolved' : 'Officer review required') +
-      '</strong><p>' + safe(result.reason) + '</p><p dir="auto">' + safe(result.question) + '</p></div>' + reviewForm(doc, p, base);
+      '</strong><p>' + safe(result.reason) + '</p><p dir="auto">' + safe(result.question) + '</p><p>' + safe(next) +
+      '</p></div>' + reviewForm(doc, p, base);
   }
   if (attempt) {
     section += '<div class="checks">' + Object.entries(layers).map(([layer, title]) => layerDetail(layer, title, attempt.checks)).join('') + '</div>';
@@ -168,12 +199,14 @@ function reviewForm(doc, p, base) {
   return '<form data-form="review" data-url="' + base + '/passages/' + safe(p.id) + '/review" data-revision="' + p.revision + '">' +
     '<div class="field-grid"><label class="field">Officer name or ID<input name="officer" maxlength="100" required></label>' +
     '<label class="field">Review action<select name="action"><option value="clarify">Record clarification and recheck</option>' +
-    '<option value="unresolved">Hold as complainant uncertain</option>' + action + '</select></label></div>' +
+    '<option value="unresolved">Leave passage unresolved</option>' + action + '</select></label></div>' +
     '<label class="field">Answer or review note<textarea name="answer" maxlength="750" rows="2"></textarea></label>' +
     '<label class="field">Corrected passage<textarea name="corrected_source" maxlength="750" rows="3" dir="auto" ' +
     'placeholder="Enter the full confirmed passage if the wording changed"></textarea><small>Include all material details from the complainant’s statement.</small></label>' +
-    '<label class="field">Confirmed language code <input name="language" maxlength="3" value="' + safe(p.language_override || '') +
-    '" placeholder="Optional, for example hi, gu, en, mul"></label>' +
+    '<label class="field">Confirmed language<input name="language" list="intake-languages" maxlength="3" value="' + safe(p.language_override || '') +
+    '" placeholder="Choose a language or enter its code"><datalist id="intake-languages">' +
+    ['en', 'hi', 'gu', 'bn', 'mr', 'pa', 'ur', 'ta', 'te', 'kn', 'ml', 'or', 'as', 'ne', 'mul'].map(code =>
+      '<option value="' + code + '">' + safe(languageNames.of(code)) + '</option>').join('') + '</datalist></label>' +
     '<p class="form-error" role="alert" hidden></p><div class="actions"><button class="button" type="submit">Record review</button>' +
     '<span class="subtle">' + safe(doc.mode === 'live' ? 'Ask at the desk' : 'Queue the question for a call-back') + '</span></div></form>';
 }
@@ -194,11 +227,12 @@ content.addEventListener('input', event => {
 });
 
 content.addEventListener('click', event => {
-  const button = event.target.closest('[data-passage]');
+  const button = event.target.closest('[data-passage], [data-passage-filter], [data-case-refresh]');
   if (!button) return;
   if (current.draft && !window.confirm('Leave this passage and discard your unsaved review?')) return;
   current.draft = false;
-  current.passage = button.dataset.passage;
+  if (button.dataset.passageFilter) current.passageFilter = button.dataset.passageFilter;
+  else if (button.dataset.passage) current.passage = button.dataset.passage;
   refresh(true);
 });
 

@@ -256,7 +256,10 @@ def build(snapshot):
     claims, issues, events = [], [], []
     for run in snapshot['runs']:
         for issue in run['escalations']:
-            issues.append({**issue, 'claim_ids': [], 'passage_id': run['passage_id'], 'evidence': run['evidence']})
+            index = issue.get('frame_index')
+            frame = run['frames'][index] if isinstance(index, int) and 0 <= index < len(run['frames']) else None
+            issues.append({**issue, 'claim_ids': [], 'passage_id': run['passage_id'], 'evidence': run['evidence'],
+                           'frame_evidence': frame['evidence'] if frame else None})
         for candidate in run['claims']:
             choice = decisions.get(candidate['id'])
             claim = _decision_claim(candidate, run, choice)
@@ -328,7 +331,7 @@ def validate_decision(graph, target, detail):
     claim = next((c for c in graph['claims'] if c['id'] == target), None)
     if action == 'retry':
         issue = issues.get(target)
-        retryable = (issue and issue['name'] in ('Local model', 'Internal error')) or (
+        retryable = (issue and issue['name'] in ('Local model', 'Internal error', 'Batch shape')) or (
             claim and claim['status'] == 'escalated' and any(c['name'] == 'Local verification' for c in claim['checks'])
         )
         if not retryable:

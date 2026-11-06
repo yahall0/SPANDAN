@@ -106,7 +106,8 @@ class Store:
         with self.connection() as conn:
             conn.execute("UPDATE passages SET status = 'queued' WHERE status = 'running'")
 
-    def create(self, filename, data, case_ref, mode, officer_language, blocks, passages, parent=None, reporter=None):
+    def create(self, filename, data, case_ref, mode, officer_language, blocks, passages, parent=None, reporter=None,
+               source_language=None):
         doc_id = uuid4().hex
         with self.connection() as conn:
             conn.execute('INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -116,9 +117,9 @@ class Store:
                 conn.execute('INSERT INTO witness_statements VALUES (?, ?, ?)', (doc_id, parent, reporter))
             conn.executemany('''
                 INSERT INTO passages
-                (document_id, id, ordinal, page, start, end, source, effective_source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', [(doc_id, p['id'], index, p['page'], p['start'], p['end'], p['source'], p['normalized'])
+                (document_id, id, ordinal, page, start, end, source, effective_source, language_override)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', [(doc_id, p['id'], index, p['page'], p['start'], p['end'], p['source'], p['normalized'], source_language)
                   for index, p in enumerate(passages, 1)])
         return doc_id
 

@@ -131,6 +131,15 @@ class ValidationTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_upload_can_record_the_confirmed_document_language(self):
+        with tempfile.TemporaryDirectory() as folder, TestClient(create_app(folder, FixedModels)) as client:
+            response = client.post('/api/cases', files={'file': ('complaint.txt', b'I saw a red car.')},
+                                   data={'source_language': 'en'})
+            self.assertEqual(response.status_code, 202)
+            passage = self.wait_for(client, response.json()['id'], 'pass')
+            self.assertEqual(passage['language_override'], 'en')
+            self.assertTrue(passage['result']['language']['confirmed'])
+
     def wait_for(self, client, key, status):
         for _ in range(150):
             passage = client.get('/api/cases/' + key).json()['passages'][0]

@@ -191,7 +191,8 @@ def create_app(data_dir=None, models_factory=LocalModels):
     def create_case(request: Request, file: UploadFile = File(), case_ref: str = Form('', max_length=100),
                     mode: Literal['live', 'deferred'] = Form('live'),
                     officer_language: Literal['en', 'hi', 'gu'] = Form('en'),
-                    parent_case: str = Form('', max_length=32), reporter: str = Form('', max_length=100)):
+                    parent_case: str = Form('', max_length=32), reporter: str = Form('', max_length=100),
+                    source_language: Literal['', 'en'] = Form('')):
         store = request.app.state.store
         if parent_case:
             if not reporter.strip():
@@ -220,7 +221,7 @@ def create_app(data_dir=None, models_factory=LocalModels):
         except IntakeError as error:
             raise HTTPException(422, str(error)) from error
         key = store.create(filename, data, case_ref.strip(), mode, officer_language, blocks, passages,
-                           parent_case or None, reporter.strip())
+                           parent_case or None, reporter.strip(), source_language or None)
         request.app.state.wake.set()
         return {'id': key, 'passages': len(passages)}
 

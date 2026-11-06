@@ -8,7 +8,7 @@ from pydantic import Field
 from .models import NLI_REVISION, ModelError, Response
 from .rules import digest, marker_anchors, value_anchors
 
-VERSION = 'claims-v2'
+VERSION = 'claims-v3'
 MAX_REPAIRS = 2
 NLI_THRESHOLD = 0.75
 LOGGER = logging.getLogger('spandan.claims')
@@ -118,7 +118,7 @@ def actor_key(value):
 
 
 def action_key(value):
-    word = re.sub(r'^to\s+', '', key(value)).split(' ', 1)[0]
+    word = re.sub(r'^(?:to|not|never)\s+', '', key(value)).split(' ', 1)[0]
     if word in IRREGULAR:
         return IRREGULAR[word]
     if len(word) > 4 and word.endswith('ies'):
@@ -145,6 +145,22 @@ def _slot_agrees(slot, frame_value, candidate_value):
 
 def _literal_in(value, quote):
     return bool(key(value) and re.search(rf'(?<!\w){re.escape(key(value))}(?!\w)', key(quote)))
+
+
+def _source_quote(proposed, source):
+    if proposed in source:
+        return proposed
+    words = proposed.split()
+    if not words:
+        return proposed
+    pattern = r'(?<!\w)' + r'\s+'.join(map(re.escape, words)) + r'(?!\w)'
+    matches = list(re.finditer(pattern, source))
+    return matches[0][0] if len(matches) == 1 else proposed
+
+
+def _frame_slot(frame, slot):
+    value = frame.get(slot)
+    return None if key(value) == 'null' and not _literal_in(value, frame['evidence']) else value
 
 
 def _reference_context(candidate, item):
@@ -217,12 +233,25 @@ def rule_checks(candidate, item, references=None):
            candidate.certainty == 'approximate')) and
           ('uncertainty' not in markers or 'uncertainty' in marker_anchors(candidate.text)),
           'Numbers, dates, amounts and stated uncertainty must retain their precision.')
-    check('Intake agreement', supported_frame and all(
-          (_slot_agrees(slot, frame.get(slot), getattr(candidate, slot)) or
-           (slot in references and _slot_agrees(slot, frame.get(slot), references[slot]['label'])))
-          for slot in ('actor', 'object', 'place', 'time', 'quantity')
-          if not (candidate.kind == 'statement' and slot in ('actor', 'object'))),
-          'The claim needs one matching intake frame with compatible material fields.')
+    differences = []
+    if supported_frame:
+        for slot in ('actor', 'object', 'place', 'time', 'quantity'):
+            if candidate.kind == 'statement' and slot in ('actor', 'object'):
+                continue
+            expected = _frame_slot(frame, slot)
+            observed = references[slot]['label'] if slot in references else getattr(candidate, slot)
+            if not _slot_agrees(slot, expected, getattr(candidate, slot)) and not _slot_agrees(slot, expected, observed):
+                differences.append({'field': slot, 'intake': expected, 'claim': observed})
+    if not supported_frame:
+        reason = ('The quote did not match a checked intake statement.' if not stated else
+                  'The claim could not be matched to one intake statement with the same action.')
+    elif differences:
+        reason = 'Intake and claim extraction read these fields differently: ' + ', '.join(d['field'] for d in differences) + '.'
+    else:
+        reason = 'The claim matches one intake statement and its material fields.'
+    check('Intake agreement', supported_frame and not differences, reason)
+    if differences:
+        status[-1]['differences'] = differences
     check('Reference ambiguity', not any(PRONOUN.fullmatch(key(getattr(candidate, slot))) and slot not in references
                                         for slot in ('actor', 'object', 'knowledge')),
           'A pronoun needs an explicit referent or an officer decision.')
@@ -232,9 +261,11 @@ def rule_checks(candidate, item, references=None):
 
 def _claim(item, candidate):
     raw = candidate
-    quote = raw.quote
+    quote = _source_quote(raw.quote, item['english'])
     fixes = {slot: None for slot in ('actor', 'object', 'place', 'time', 'quantity', 'knowledge')
              if key(getattr(raw, slot)) == 'null' and not _literal_in('null', quote)}
+    if quote != raw.quote:
+        fixes['quote'] = quote
     # Restore exact quoted qualifiers if the model returned a literal but shortened wording.
     if raw.text != quote and _literal_in(raw.text, quote):
         fixes['text'] = quote
@@ -297,16 +328,24 @@ class ClaimExtractor:
         by_id = {item['id']: item for item in batch}
         todo = list(by_id)
         feedback = {}
+        isolated = set()
         inventory = self.models.inventory()
         for number in range(1, MAX_REPAIRS + 2):
             if not todo:
                 break
-            trace = []
-            try:
-                results, issues = self._attempt([by_id[i] for i in todo], feedback, inventory, trace)
-            except ModelError as error:
-                results = {i: [] for i in todo}
-                issues = {i: [('Local model', str(error), {})] for i in todo}
+            results, issues, traces = {}, {}, {}
+            together = [i for i in todo if i not in isolated]
+            groups = ([together] if together else []) + [[i] for i in todo if i in isolated]
+            for group in groups:
+                trace = []
+                try:
+                    extracted, problems = self._attempt([by_id[i] for i in group], feedback, inventory, trace)
+                except ModelError as error:
+                    extracted = {i: [] for i in group}
+                    problems = {i: [('Local model', str(error), {})] for i in group}
+                results.update(extracted)
+                issues.update(problems)
+                traces.update({i: trace for i in group})
             repair = []
             for i in todo:
                 run = runs[i]
@@ -315,15 +354,18 @@ class ClaimExtractor:
                 claims = [*previous.values(), *incoming]
                 covered = {c['frame_index'] for c in claims if c['status'] == 'verified'}
                 problems = issues[i]
+                if any(name == 'Batch shape' for name, _, _ in problems):
+                    isolated.add(i)
                 missing = set(range(len(by_id[i]['frames']))) - covered
-                for frame in sorted(missing - {c['frame_index'] for c in incoming}):
-                    problems.append(('Frame coverage', 'An intake statement has no verified claim.',
-                                     {'frame_index': frame}))
+                if not problems:
+                    for frame in sorted(missing - {c['frame_index'] for c in incoming}):
+                        problems.append(('Frame coverage', 'An intake statement has no verified claim.',
+                                         {'frame_index': frame}))
                 if not claims and not problems:
                     problems.append(('Frame coverage', 'This passage has no checked claim.', {}))
                 run['claims'] = claims
                 run['escalations'] = [_issue(run, name, detail, **fields) for name, detail, fields in problems]
-                run['attempts'].append({'round': number - 1, 'calls': trace, 'claims': results[i],
+                run['attempts'].append({'round': number - 1, 'calls': traces[i], 'claims': results[i],
                                         'issues': run['escalations']})
                 failures = [c for c in incoming if c['status'] != 'verified']
                 if problems or failures:
@@ -354,7 +396,7 @@ class ClaimExtractor:
             results[identifier] = []
             issues[identifier] = []
             if len(parts) != 1:
-                issues[identifier].append(('Batch shape', 'Expected exactly one extraction for this passage.', {}))
+                issues[identifier].append(('Batch shape', 'The claim model did not return one usable result for this passage.', {}))
                 continue
             claims = [_claim(item, candidate) for candidate in parts[0].claims]
             results[identifier] = list({claim['id']: claim for claim in claims}.values())
