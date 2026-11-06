@@ -160,6 +160,7 @@ pre { margin: 9px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; color: va
 .claim-fields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 11px; margin-bottom: 4px; }
 .claim-fields dt { font-weight: 650; }
 .claim-fields dd { margin: 0; overflow-wrap: anywhere; }
+[data-actions][hidden] { display: none; }
 @media (max-width: 1050px) {
   body { grid-template-columns: 190px minmax(0, 1fr); }
   .layout { grid-template-columns: 1fr; }

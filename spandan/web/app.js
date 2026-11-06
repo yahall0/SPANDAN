@@ -3,9 +3,27 @@
 const content = document.querySelector('#content');
 const statusIndicator = document.querySelector('#system-status');
 const toast = document.querySelector('#toast');
-const labels = {pass: 'Verified', clarify: 'Review', unresolved: 'Unresolved', running: 'Checking', queued: 'Queued'};
-const layers = {L0: 'Structure', L1: 'Meaning anchors', L2: 'English agreement', L3: 'Source verification'};
+const labels = {pass: 'Checked', clarify: 'Needs review', unresolved: 'Left open', running: 'Checking', queued: 'Waiting'};
+const layers = {L0: 'Text and format', L1: 'Numbers and key details', L2: 'Agreement in meaning', L3: 'Match with the original'};
+const textCheckNames = {
+  'Passage ID and output': 'Text is present', 'English and length': 'English text and length',
+  'Protected values': 'Private details preserved', 'Values and roles': 'Numbers and dates',
+  'Meaning markers': 'Denials, uncertainty and reported information',
+  'Bidirectional equivalence': 'Same meaning both ways', 'English statement coverage': 'Statements included',
+  'Source and English evidence coverage': 'Original wording covered', 'Factual ambiguity': 'Unclear wording',
+  'Statement pairing': 'Matching statements', 'Bidirectional entailment': 'Same meaning both ways',
+  'Statement count': 'Number of statements', 'Material slots': 'Key details match'
+};
+const reviewErrors = {
+  'Record the answer and a corrected passage or confirmed language.': 'Add a short note and either choose the language or enter the corrected text.',
+  'Record why the complainant is uncertain.': 'Tell us why you are leaving this open.',
+  'The graph changed. Reload it before recording a decision.': 'The case has changed. Refresh it before saving your review.',
+  'The passage changed. Reload it before recording a review.': 'This section has changed. Refresh it before saving your review.',
+  'Only compatible entity types can be merged.': 'Choose two names for the same kind of thing, such as two names for one person.',
+  'The quote, grounded fields and suspicion wording must remain faithful to the source.': 'Keep the detail consistent with the original text, including any uncertainty or suspicion.'
+};
 const languageNames = new Intl.DisplayNames(['en'], {type: 'language'});
+const documentLanguages = ['en', 'hi', 'gu', 'bn', 'mr', 'pa', 'ur', 'ta', 'te', 'kn', 'ml', 'or', 'as', 'ne', 'mai', 'sa', 'sd', 'kok', 'mni', 'brx', 'doi', 'ks', 'sat', 'si', 'mul'];
 let current = {key: '', signature: '', passage: '', draft: false};
 let toastTimer;
 
@@ -29,7 +47,8 @@ async function request(url, options) {
   if (!result.ok) {
     const error = await result.json().catch(() => ({}));
     const detail = typeof error.detail === 'string' ? error.detail : error.detail?.[0]?.msg;
-    throw new Error(detail || 'The local request failed. Try again.');
+    const message = (detail || 'The app could not finish. Try again.').replace(/^Value error, /, '');
+    throw new Error(reviewErrors[message] || message);
   }
   return result.json();
 }
@@ -67,52 +86,53 @@ async function refresh(force = false) {
     state.signature = signature;
     state.data = data;
     content.innerHTML = Array.isArray(data) ? dashboard(data, key === 'new') : view === 'graph' ? graphView(data) : caseView(data);
+    prepareReviewForms();
     content.setAttribute('aria-busy', 'false');
-    document.querySelector('#breadcrumb').textContent = view === 'graph' ? 'Claims and timeline' : key === 'new' ? 'New complaint' : key === 'home' ? 'Case intake' : 'Passage review';
+    document.querySelector('#breadcrumb').textContent = view === 'graph' ? 'Details and timeline' : key === 'new' ? 'New complaint' : key === 'home' ? 'Complaints' : 'Check complaint text';
     document.querySelector('#nav-cases').classList.toggle('active', key !== 'new');
     document.querySelector('#nav-new').classList.toggle('active', key === 'new');
   } catch (error) {
     if (state !== current) return;
     content.setAttribute('aria-busy', 'false');
-    content.innerHTML = '<p class="notice" role="alert">' + safe(error.message) + '</p><a class="back" href="#">← Back to case intake</a>';
+    content.innerHTML = '<p class="notice" role="alert">' + safe(error.message) + '</p><a class="back" href="#">← Back to complaints</a>';
   }
 }
 
 function uploadCard() {
   return '<section class="card"><div class="card-title"><h2>New complaint</h2>' +
-    '<p>Upload a typed document for local verification.</p></div><div class="card-body">' +
+    '<p>Add a typed complaint to start checking it.</p></div><div class="card-body">' +
     '<form data-form="upload"><label class="field">Complaint document' +
     '<input name="file" type="file" accept=".pdf,.docx,.doc,.txt" required><small>PDF, DOCX, DOC or TXT · Up to 10 MB</small></label>' +
     '<label class="field">Case reference <input name="case_ref" maxlength="100" placeholder="Optional reference"></label>' +
     sourceLanguageControl() +
-    '<div class="field-grid"><label class="field">Complainant<select name="mode"><option value="live">At the desk</option>' +
-    '<option value="deferred">Call back later</option></select></label>' +
-    '<label class="field">Officer language<select name="officer_language"><option value="en">English</option>' +
+    '<div class="field-grid"><label class="field">Can you ask the complainant questions now?<select name="mode"><option value="live">Yes, they are here</option>' +
+    '<option value="deferred">No, follow up later</option></select></label>' +
+    '<label class="field">Language for follow-up questions<select name="officer_language"><option value="en">English</option>' +
     '<option value="hi">हिन्दी</option><option value="gu">ગુજરાતી</option></select></label></div>' +
-    '<p class="form-error" role="alert" hidden></p><button class="button" type="submit">Start verification <span aria-hidden="true">→</span></button>' +
+    '<p class="form-error" role="alert" hidden></p><button class="button" type="submit">Check complaint <span aria-hidden="true">→</span></button>' +
     '</form></div></section>';
 }
 
 function sourceLanguageControl() {
   return '<label class="field">Document language<select name="source_language"><option value="">Detect automatically</option>' +
-    '<option value="en">English · I confirm this document is in English</option></select>' +
-    '<small>Applies to the uploaded text. Officer language controls review questions.</small></label>';
+    '<option value="en">English</option></select>' +
+    '<small>Choose English if the whole document is in English.</small></label>';
 }
 
 function dashboard(cases, isNew) {
   const count = key => cases.reduce((sum, item) => sum + item[key], 0);
   const rows = cases.map(item => '<a class="case-row" href="#case/' + safe(item.id) + '"><div><strong>' +
     safe(item.case_ref || item.filename) + '</strong><small>' + safe(item.case_ref ? item.filename + ' · ' : '') +
-    safe(timestamp(item.received_at)) + ' · ' + item.passed + '/' + item.total + ' verified</small></div>' +
+    safe(timestamp(item.received_at)) + ' · ' + item.passed + ' of ' + item.total + ' sections checked</small></div>' +
     badge(item.review ? 'clarify' : item.pending ? 'running' : 'pass') + '</a>').join('');
-  return '<div class="heading"><div><span class="eyebrow">Component 01 · Complaint intake</span><h1>' +
-    (isNew ? 'Intake a complaint' : 'Complaint workspace') + '</h1>' +
-    '<p>Review typed complaints and prepare verified English for the next stage.</p></div>' +
+  return '<div class="heading"><div><h1>' +
+    (isNew ? 'Add a complaint' : 'Complaints') + '</h1>' +
+    '<p>See which complaints need your attention.</p></div>' +
     (isNew ? '<a class="button secondary" href="#">View cases</a>' : '<a class="button" href="#new">＋ New complaint</a>') + '</div>' +
-    '<div class="metric-grid">' + metric('Complaints', cases.length) + metric('Verified passages', count('passed')) +
-    metric('Needs review', count('review')) + metric('In progress', count('pending')) + '</div>' +
+    '<div class="metric-grid">' + metric('Complaints', cases.length) + metric('Sections checked', count('passed')) +
+    metric('Sections to review', count('review')) + metric('Still being checked', count('pending')) + '</div>' +
     '<div class="layout"><section class="card"><div class="card-title"><h2>Complaint register</h2>' +
-    '<p>Open a case to see passage evidence and review questions.</p></div>' +
+    '<p>Open a complaint to see the original text and any questions to answer.</p></div>' +
     (rows || '<div class="empty"><span aria-hidden="true">▤</span><h3>No complaints yet</h3><p>Upload a typed document to start a case.</p></div>') +
     '</section>' + uploadCard() + '</div>';
 }
@@ -124,62 +144,60 @@ function caseView(doc) {
   const visible = current.passageFilter === 'review' ? passages.filter(needsIntake) : passages;
   const selected = visible.find(p => p.id === current.passage) || visible.find(needsIntake) || visible[0];
   const base = '/api/cases/' + safe(doc.id);
-  return '<a class="back" href="#">← Case intake</a><div class="heading"><div><span class="eyebrow">Passage verification</span><h1>' +
+  return '<a class="back" href="#">← Complaints</a><div class="heading"><div><span class="eyebrow">1 of 2 · Check the text</span><h1>' +
     safe(doc.case_ref || doc.filename) + '</h1><p>' + safe(doc.case_ref ? doc.filename + ' · ' : '') +
-    safe(doc.mode === 'live' ? 'Complainant at the desk' : 'Deferred call-back') + '</p></div><div class="actions">' +
-    '<a class="button secondary" href="#graph/' + safe(doc.parent_case || doc.id) + '">Claims and timeline</a>' +
+    safe(doc.mode === 'live' ? 'Available for questions now' : 'Follow up later') + '</p></div><div class="actions">' +
+    '<a class="button" href="#graph/' + safe(doc.parent_case || doc.id) + '">See details and timeline</a>' +
     '<button type="button" class="button secondary" data-case-refresh>Refresh</button>' +
     '<a class="button secondary" href="' + base + '/original">Original file</a>' +
-    (passed ? '<a class="button" download="spandan-checked.json" href="' + base + '/handoff' +
-      (passed === passages.length ? '?finalize=true">Download checked English' : '">Download verified passages') + '</a>' : '') +
-    '</div></div><div class="case-meta"><span>Received ' + safe(timestamp(doc.received_at)) + '</span><span>English output</span>' +
-    '<span title="' + safe(doc.sha256) + '">SHA-256 ' + safe(doc.sha256.slice(0, 12)) + '…</span></div>' +
-    '<div class="metric-grid">' + metric('Total passages', passages.length) + metric('Verified', passed) +
-    metric('Needs intake review', review) + metric('In progress', passages.length - passed - review) + '</div>' +
-    '<p class="notice info">' + (review ? safe(review + ' passages need intake review before claim extraction can use them. ') : '') +
-    'Verified here means the passage cleared intake. Open <a href="#graph/' + safe(doc.parent_case || doc.id) +
-    '">Claims and timeline</a> to see which claims cleared the next stage.</p>' +
-    '<div class="review-layout"><section class="card"><div class="card-title"><h2>Passages</h2>' +
-    '<div class="review-filters">' + [['all', 'All passages'], ['review', 'Needs review']].map(([filter, label]) =>
+    (passed ? '<a class="button secondary" download="spandan-checked.json" href="' + base + '/handoff' +
+      (passed === passages.length ? '?finalize=true">Download checked text' : '">Download checked sections') + '</a>' : '') +
+    '</div></div><div class="case-meta"><span>Received ' + safe(timestamp(doc.received_at)) + '</span></div>' +
+    '<div class="metric-grid">' + metric('Text sections', passages.length) + metric('Text checked', passed) +
+    metric('Sections to review', review) + metric('Still being checked', passages.length - passed - review) + '</div>' +
+    '<p class="notice info">' + (review ? safe(review === 1 ? 'One section needs your help. ' : review + ' sections need your help. ') : '') +
+    'The app looks for case details in the sections it has checked.</p>' +
+    '<div class="review-layout"><section class="card"><div class="card-title"><h2>Complaint text</h2>' +
+    '<div class="review-filters">' + [['all', 'All sections'], ['review', 'Needs review']].map(([filter, label]) =>
       '<button type="button" class="button secondary" data-passage-filter="' + filter + '" aria-pressed="' +
       ((current.passageFilter || 'all') === filter) + '">' + label + '</button>').join('') + '</div></div><div class="passage-list">' +
     visible.map(p => '<button type="button" class="passage-button ' + (p.id === selected?.id ? 'selected' : '') +
       '" data-passage="' + safe(p.id) + '" aria-pressed="' + (p.id === selected.id) + '"><span><strong>' + safe(p.id) +
       '</strong><small class="passage-excerpt">' + safe(excerpt(p.source, 85)) + '</small></span>' + badge(p.status) + '</button>').join('') +
-    '</div></section>' + (selected ? passageView(doc, selected, base) : '<p class="notice info">No passages need intake review.</p>') + '</div>';
+    '</div></section>' + (selected ? passageView(doc, selected, base) : '<p class="notice info">No sections need your review.</p>') + '</div>';
 }
 
 function passageView(doc, p, base) {
   const result = p.result;
   const attempt = result?.attempts?.at(-1);
-  let section = '<section class="card"><div class="card-title"><h2>Passage ' + safe(p.id) + ' ' + badge(p.status) + '</h2>' +
-    '<p>' + (p.page ? 'PDF page ' + safe(p.page) + ' · ' : '') + 'Source characters ' + safe(p.start) + '–' + safe(p.end) +
-    ' · Revision ' + safe(p.revision) + (result?.language ? (p.language_override ? ' · Confirmed ' : ' · Detected ') +
-      safe(languageNames.of(result.language.language)) : '') + '</p></div><div class="card-body">' +
-    '<div class="comparison">' + panel('Original source', p.source) +
-    panel(p.status === 'pass' ? 'Verified English' : 'English output',
-      p.status === 'pass' ? result.checked_english : 'Available after verification passes.', p.status === 'pass') + '</div>';
-  if (p.revision > 1 && p.effective_source !== p.source) section += panel('Source used for this revision', p.effective_source);
+  const meta = [p.page ? 'PDF page ' + p.page : '', result?.language && result.slot !== 'language' ?
+    (p.language_override ? 'Language confirmed: ' : 'Language detected: ') + languageNames.of(result.language.language) : ''].filter(Boolean);
+  let section = '<section class="card"><div class="card-title"><h2>Section ' + safe(p.id) + ' ' + badge(p.status) + '</h2>' +
+    (meta.length ? '<p>' + safe(meta.join(' · ')) + '</p>' : '') + '</div><div class="card-body">' +
+    '<div class="comparison">' + panel('Original text', p.source) +
+    (p.status === 'pass' && result.checked_english !== p.source ? panel('Checked English text', result.checked_english, true) : '') + '</div>';
+  if (p.revision > 1 && p.effective_source !== p.source) section += panel('Text after your clarification', p.effective_source);
   if (p.status === 'queued' || p.status === 'running') {
-    section += '<p class="notice info">The local worker will process this passage. Other verified passages are available as they finish.</p>';
+    section += '<p class="notice info">The app is checking the complaint. You can read the sections it has already checked.</p>';
   }
   if (p.status === 'clarify' || p.status === 'unresolved') {
-    const next = result.slot === 'language' ? 'Select the confirmed language and record a short review note.' :
-      result.slot === 'service' ? 'Retry after the local models are available.' :
-      'Compare the original with the reason below. Record a clarification if the source can be made clearer.';
-    section += '<div class="notice"><strong>' + safe(p.status === 'unresolved' ? 'Held as unresolved' : 'Officer review required') +
-      '</strong><p>' + safe(result.reason) + '</p><p dir="auto">' + safe(result.question) + '</p><p>' + safe(next) +
-      '</p></div>' + reviewForm(doc, p, base);
+    const next = result.slot === 'language' ? 'The app could not tell which language this section is in. Choose the language below.' :
+      result.slot === 'service' ? 'The app could not finish checking this section. Use Try again to check it once more.' :
+      'Read the original text above. If you can clarify what it says, record the answer below.';
+    section += '<div class="notice"><strong>' + safe(p.status === 'unresolved' ? 'You left this open' : 'This section needs your help') +
+      '</strong><p>' + safe(next) + '</p>' + (!['language', 'service'].includes(result.slot) && result.question ?
+        '<p dir="auto">' + safe(result.question) + '</p>' : '') + '</div>' + reviewForm(doc, p, base);
   }
   if (attempt) {
-    section += '<div class="checks">' + Object.entries(layers).map(([layer, title]) => layerDetail(layer, title, attempt.checks)).join('') + '</div>';
+    section += '<details class="fold"><summary>What the app checked</summary><div class="checks">' +
+      Object.entries(layers).map(([layer, title]) => layerDetail(layer, title, attempt.checks)).join('') + '</div></details>';
     if (attempt.translations.A || attempt.translations.B) {
-      section += '<details class="fold"><summary>Local model readings</summary><div class="comparison">' +
-        panel('Path A', attempt.translations.A || 'Unavailable') + panel('Path B', attempt.translations.B || 'Unavailable') + '</div></details>';
+      section += '<details class="fold"><summary>English text used for the checks</summary><div class="comparison">' +
+        panel('First version', attempt.translations.A || 'Unavailable') + panel('Second version', attempt.translations.B || 'Unavailable') + '</div></details>';
     }
   }
-  section += '<details class="fold" data-history="' + base + '/passages/' + safe(p.id) + '/history"><summary>Audit history</summary>' +
-    '<pre>Open to load history.</pre></details>';
+  section += '<details class="fold" data-history="' + base + '/passages/' + safe(p.id) + '/history"><summary>Technical history</summary>' +
+    '<pre>Loading the record…</pre></details>';
   if (result) section += feedbackForm(p, base);
   return section + '</div></section>';
 }
@@ -187,38 +205,41 @@ function passageView(doc, p, base) {
 function layerDetail(layer, title, allChecks) {
   const checks = allChecks.filter(check => check.layer === layer);
   const state = checks.length ? checks.every(check => check.ok) ? 'pass' : 'clarify' : 'Not run';
-  return '<details class="check"><summary>' + layer + ' · ' + title + ' ' + badge(state) + '</summary>' +
-    (checks.map(check => '<p><strong>' + safe(check.name) + '</strong> · ' + safe(check.ok ? 'Passed' : 'Failed') +
-      '<br>' + safe(check.detail) + (check.expected === undefined ? '' : '<br>Expected ' + safe(JSON.stringify(check.expected)) +
-        ' · Observed ' + safe(JSON.stringify(check.observed))) + '</p>').join('') || '<p>A preceding check stopped this passage.</p>') +
+  return '<details class="check"><summary>' + title + ' ' + badge(state) + '</summary>' +
+    (checks.map(check => {
+      const name = check.name.replace(/^Path [AB] · /, '');
+      return '<p><strong>' + safe(textCheckNames[name] || name) + '</strong> · ' +
+        (check.ok ? 'Passed' : 'Needs review') + '</p>';
+    }).join('') || '<p>The app stopped at an earlier check.</p>') +
     '</details>';
 }
 
 function reviewForm(doc, p, base) {
-  const action = p.result.slot === 'service' ? '<option value="retry">Recheck after fixing local inference</option>' : '';
+  const retry = p.result.slot === 'service';
   return '<form data-form="review" data-url="' + base + '/passages/' + safe(p.id) + '/review" data-revision="' + p.revision + '">' +
     '<div class="field-grid"><label class="field">Officer name or ID<input name="officer" maxlength="100" required></label>' +
-    '<label class="field">Review action<select name="action"><option value="clarify">Record clarification and recheck</option>' +
-    '<option value="unresolved">Leave passage unresolved</option>' + action + '</select></label></div>' +
-    '<label class="field">Answer or review note<textarea name="answer" maxlength="750" rows="2"></textarea></label>' +
-    '<label class="field">Corrected passage<textarea name="corrected_source" maxlength="750" rows="3" dir="auto" ' +
-    'placeholder="Enter the full confirmed passage if the wording changed"></textarea><small>Include all material details from the complainant’s statement.</small></label>' +
-    '<label class="field">Confirmed language<input name="language" list="intake-languages" maxlength="3" value="' + safe(p.language_override || '') +
-    '" placeholder="Choose a language or enter its code"><datalist id="intake-languages">' +
-    ['en', 'hi', 'gu', 'bn', 'mr', 'pa', 'ur', 'ta', 'te', 'kn', 'ml', 'or', 'as', 'ne', 'mul'].map(code =>
-      '<option value="' + code + '">' + safe(languageNames.of(code)) + '</option>').join('') + '</datalist></label>' +
-    '<p class="form-error" role="alert" hidden></p><div class="actions"><button class="button" type="submit">Record review</button>' +
-    '<span class="subtle">' + safe(doc.mode === 'live' ? 'Ask at the desk' : 'Queue the question for a call-back') + '</span></div></form>';
+    '<label class="field">What do you want to do?<select name="action">' +
+    (retry ? '<option value="retry">Try again</option>' : '') + '<option value="clarify">Clarify the text</option>' +
+    '<option value="unresolved">Leave open for now</option></select></label></div>' +
+    '<label class="field" data-actions="clarify unresolved">What did you find out, or why are you leaving this open?' +
+    '<textarea name="answer" maxlength="750" rows="2"></textarea></label>' +
+    '<label class="field" data-actions="clarify">What should the section say?<textarea name="corrected_source" maxlength="750" rows="3" dir="auto" ' +
+    'placeholder="Enter the full section if the wording changed"></textarea><small>You can leave this blank if you are only confirming the language.</small></label>' +
+    '<label class="field" data-actions="clarify">Language of this section<select name="language"><option value="">Keep the current language</option>' +
+    documentLanguages.map(code => '<option value="' + code + '"' + (code === p.language_override ? ' selected' : '') +
+      '>' + safe(languageNames.of(code)) + '</option>').join('') + '</select></label>' +
+    '<p class="form-error" role="alert" hidden></p><div class="actions"><button class="button" type="submit">Save review</button>' +
+    '<span class="subtle">' + (doc.mode === 'live' ? 'Ask the person now' : 'Follow up with the person later') + '</span></div></form>';
 }
 
 function feedbackForm(p, base) {
-  return '<details class="fold"><summary>Record verification feedback</summary><form data-form="feedback" data-url="' + base +
+  return '<details class="fold"><summary>Flag a problem or add a note</summary><form data-form="feedback" data-url="' + base +
     '/passages/' + safe(p.id) + '/feedback" data-revision="' + p.revision + '"><div class="field-grid">' +
     '<label class="field">Officer name or ID<input name="officer" maxlength="100" required></label>' +
-    '<label class="field">Signal<select name="kind"><option value="possible_escape">Possible accuracy problem</option>' +
-    '<option value="false_alarm">Possible false alarm</option><option value="readback_conflict">Read-back conflict</option>' +
-    '<option value="downstream_conflict">Downstream conflict</option><option value="audit_note">Audit note</option></select></label></div>' +
-    '<label class="field">Evidence<textarea name="detail" maxlength="2000" required></textarea></label>' +
+    '<label class="field">What happened?<select name="kind"><option value="possible_escape">The app may have checked this incorrectly</option>' +
+    '<option value="false_alarm">This may have been flagged by mistake</option><option value="readback_conflict">The person disagrees with the text</option>' +
+    '<option value="downstream_conflict">A case detail disagrees with the text</option><option value="audit_note">I want to leave a note</option></select></label></div>' +
+    '<label class="field">Tell us what you noticed<textarea name="detail" maxlength="2000" required></textarea></label>' +
     '<p class="form-error" role="alert" hidden></p><div class="actions"><button class="button secondary" type="submit">Save feedback</button></div></form></details>';
 }
 
@@ -226,10 +247,37 @@ content.addEventListener('input', event => {
   if (event.target.closest('form')) current.draft = true;
 });
 
+function syncReviewForm(form) {
+  const action = form.elements.action.value;
+  for (const group of form.querySelectorAll('[data-actions]')) {
+    group.hidden = !group.dataset.actions.split(' ').includes(action);
+    for (const control of group.querySelectorAll('input, select, textarea')) control.disabled = group.hidden;
+  }
+  form.querySelector('button[type=submit]').textContent = action === 'retry' ? 'Try again' :
+    action === 'clarify' ? 'Save and check again' : 'Save review';
+}
+
+function prepareReviewForms() {
+  content.querySelectorAll('form[data-form="review"], form[data-form="decision"]').forEach(syncReviewForm);
+}
+
+content.addEventListener('change', event => {
+  const form = event.target.closest('form[data-form="review"], form[data-form="decision"]');
+  if (!form) return;
+  if (event.target.name === 'field') updateCorrectionValue(form, event.target.value);
+  if (event.target.name === 'action' || event.target.name === 'field') syncReviewForm(form);
+});
+
 content.addEventListener('click', event => {
+  if (event.target.closest('[data-review-jump]')) {
+    const queue = document.querySelector('#review-queue');
+    queue?.focus({preventScroll: true});
+    queue?.scrollIntoView({block: 'start'});
+    return;
+  }
   const button = event.target.closest('[data-passage], [data-passage-filter], [data-case-refresh]');
   if (!button) return;
-  if (current.draft && !window.confirm('Leave this passage and discard your unsaved review?')) return;
+  if (current.draft && !window.confirm('Discard your unsaved changes?')) return;
   current.draft = false;
   if (button.dataset.passageFilter) current.passageFilter = button.dataset.passageFilter;
   else if (button.dataset.passage) current.passage = button.dataset.passage;
@@ -265,10 +313,10 @@ content.addEventListener('submit', async event => {
       current.draft = false;
       if (type === 'witness') {
         await refresh(true);
-        notify('Witness statement queued for verification.');
+        notify('Witness statement added. The app will check it next.');
       } else {
         location.hash = 'case/' + created.id;
-        notify('Complaint queued for verification.');
+        notify('Complaint added. The app will start checking it.');
       }
     } else {
       const body = {...Object.fromEntries(data), revision: Number(form.dataset.revision)};
@@ -281,11 +329,13 @@ content.addEventListener('submit', async event => {
         body.version = form.dataset.version;
         body.target = form.dataset.target;
         for (const field of ['field', 'value', 'other']) body[field] = body[field] || null;
+        if (body.action === 'retry') body.reason = 'Asked the app to check this section again.';
       }
       await request(form.dataset.url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
       current.draft = false;
       await refresh(true);
-      notify(type === 'review' ? 'Officer review saved.' : type === 'decision' ? 'Graph decision recorded.' : 'Feedback saved.');
+      notify(body.action === 'retry' ? 'The app will check this section again.' :
+        type === 'review' || type === 'decision' ? 'Review saved.' : 'Note saved.');
     }
   } catch (error) {
     errorOutput.textContent = error.message;
@@ -299,7 +349,7 @@ async function updateStatus() {
   try {
     const status = await request('/api/status');
     statusIndicator.classList.toggle('ready', status.ready);
-    statusIndicator.lastChild.textContent = status.ready ? ' Models ready' : ' Model setup needed';
+    statusIndicator.lastChild.textContent = status.ready ? ' Ready to check' : ' Setup needed';
     statusIndicator.title = status.ready ? status.models.map(model => model.name).join(', ') :
       'Run python -m spandan.setup_models and start Ollama.';
   } catch {
