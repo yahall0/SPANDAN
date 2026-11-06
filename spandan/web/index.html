@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="Local complaint intake, translation and verification">
+  <title>SPANDAN · Complaint Intake</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <aside class="rail">
+    <a class="brand" href="#" aria-label="SPANDAN workspace">
+      <svg viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="9" fill="currentColor"/><path d="M6 18h6l3-7 5 14 3-7h7" fill="none" stroke="#102f2a" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>SPANDAN<small>OFFICER WORKSPACE</small></span>
+    </a>
+    <div class="rail-label">WORKSPACE</div>
+    <nav aria-label="Workspace">
+      <a id="nav-cases" href="#" class="active"><span aria-hidden="true">▤</span> Case intake</a>
+      <a id="nav-new" href="#new"><span aria-hidden="true">＋</span> New complaint</a>
+    </nav>
+    <div class="rail-footer">
+      <span class="connection" id="system-status"><i></i> Checking models</span>
+      <small>Local processing only</small>
+    </div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar">
+      <span>Operations <span aria-hidden="true">/</span> <strong id="breadcrumb">Case intake</strong></span>
+      <span class="privacy"><i></i> ON DEVICE</span>
+    </header>
+    <main id="content" aria-busy="true"><p class="loading">Loading workspace…</p></main>
+    <div id="toast" class="toast" role="status" hidden></div>
+  </div>
+</body>
+</html>
